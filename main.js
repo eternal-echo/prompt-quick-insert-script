@@ -74,12 +74,20 @@
             suggestionBox.appendChild(suggestionDiv);
         });
 
-        // 定位提示框到输入框的上方
+        // 定位提示框到输入框的下方
         const rect = inputElement.getBoundingClientRect();
-        suggestionBox.style.top = `${rect.top + window.scrollY - suggestionBox.offsetHeight}px`; // 上方显示
+        // 使用 bottom 来定位
+        suggestionBox.style.bottom = `${window.innerHeight - (rect.top + window.scrollY)}px`; // 底部显示
         suggestionBox.style.left = `${rect.left + window.scrollX}px`;
         suggestionBox.style.width = `${rect.width}px`; // 和输入框同宽
         suggestionBox.style.display = 'block';
+
+        // 确保建议框不会超出可视区域
+        if (suggestionBox.offsetTop + suggestionBox.offsetHeight > window.innerHeight + window.scrollY) {
+            // 如果建议框超出底部边界，将其移动到输入框上方
+            suggestionBox.style.bottom = 'auto';
+            suggestionBox.style.top = `${rect.top + window.scrollY - suggestionBox.offsetHeight}px`; // 上方显示
+        }
     }
 
     // Function to insert prompt into the input box, replacing the / part
