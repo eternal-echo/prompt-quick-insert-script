@@ -6,6 +6,7 @@
 // @author       Grimoire
 // @match        https://chatgpt.com/*
 // @grant        none
+// @license MIT
 // ==/UserScript==
 
 (function () {
