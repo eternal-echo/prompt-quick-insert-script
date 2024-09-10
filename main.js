@@ -15,37 +15,55 @@
     const InputCaptureModule = {
         inputField: null, // 存放输入框元素
         triggerChar: '/', // 触发字符
-
+        retryLimit: 5, // 重试次数限制
+        retryCount: 0, // 当前重试次数
+    
         init() {
             console.log('InputCaptureModule: Initializing...');
-            this.inputField = document.querySelector('textarea'); // 假设ChatGPT使用textarea作为输入框
+            this.findInputField();
+        },
+    
+        findInputField() {
+            this.inputField = document.querySelector('textarea'); // 尝试获取输入框元素
             if (this.inputField) {
                 this.inputField.addEventListener('keyup', this.handleInput.bind(this));
                 console.log('InputCaptureModule: Input field found and event listener added.');
+            } else if (this.retryCount < this.retryLimit) {
+                this.retryCount++;
+                console.warn(`InputCaptureModule: Input field not found. Retrying... (${this.retryCount}/${this.retryLimit})`);
+                setTimeout(this.findInputField.bind(this), 1000); // 1秒后重试
             } else {
-                console.error('InputCaptureModule: Input field not found.');
+                console.error('InputCaptureModule: Failed to find input field after maximum retries.');
             }
         },
-
+    
         handleInput(event) {
-            if (SuggestionBoxModule.suggestionBox.style.display === 'none') {
-                // 如果建议框被隐藏，不处理输入
-                return;
-            }
-
+            if (!this.inputField) return; // 确保inputField已初始化
+    
             const inputValue = this.inputField.value;
             console.log(`InputCaptureModule: User typed - ${inputValue}`);
-
-            // 检测是否输入了触发字符
+    
             const triggerIndex = inputValue.lastIndexOf(this.triggerChar);
             if (triggerIndex !== -1) {
-                const query = inputValue.slice(triggerIndex + 1); // 获取触发字符后面的内容
-                console.log(`InputCaptureModule: Trigger character detected. Query - "${query}"`);
+                // 找到第一个 '\n' 的索引
+                const nextLineIndex = inputValue.indexOf('\n', triggerIndex);
+
+                // 如果找不到换行符，使用整个字符串结尾
+                const endIndex = nextLineIndex !== -1 ? nextLineIndex : inputValue.length;
+
+                // 获取 '/' 和 '\n' 之间的内容
+                const query = inputValue.slice(triggerIndex + 1, endIndex);
+                console.log(`InputCaptureModule: Extracted query - "${query}"`);
+
+                // 根据 query 进行匹配
                 const results = DataMatchingModule.match(query);
+
+                // 渲染建议框
                 SuggestionBoxModule.renderSuggestions(results);
             }
         }
     };
+    
 
     
 
@@ -165,24 +183,13 @@
                 suggestionItem.style.padding = '5px';
                 suggestionItem.style.cursor = 'pointer';
         
-                // 创建包含 name 和 tag 的第一行
-                const firstLine = document.createElement('div');
-                firstLine.innerText = `${suggestion.name} - ${suggestion.tag.join(', ')}`;
-                firstLine.style.fontWeight = 'bold'; // 第一行字体加粗
-        
-                // 创建包含 prompt 内容的第二行
-                const secondLine = document.createElement('div');
-                const promptWords = suggestion.prompt.split(' ').slice(0, 100).join(' '); // 只取前100个词
-                secondLine.innerText = `${promptWords}...`;
-        
                 // 如果是选中的索引，保持高亮
                 if (index === previousSelectedIndex) {
                     suggestionItem.style.backgroundColor = '#d3d3d3';
                 }
-        
-                // 将两行内容添加到建议项中
-                suggestionItem.appendChild(firstLine);
-                suggestionItem.appendChild(secondLine);
+
+                // 添加提示内容，格式为 "[tag] name:\n prompt"
+                suggestionItem.textContent = `[${suggestion.tag.join(', ')}] ${suggestion.name}:\n ${suggestion.prompt.substring(0, 50)}...`;
         
                 // 添加点击事件
                 suggestionItem.addEventListener('click', () => {
@@ -209,8 +216,9 @@
             this.suggestionBox.style.left = `${window.scrollX + inputFieldRect.left}px`;
             this.suggestionBox.style.width = `${inputFieldRect.width}px`;
             this.suggestionBox.style.display = 'block';
-            // 打印建议框的属性 suggestionBox.style日志
-            console.log('SuggestionBoxModule: "${this.suggestionBox.style}"');
+            // 日志中打印建议框suggestionBox的所有参数
+            console.log('SuggestionBoxModule: Suggestion box displayed and positioned.');
+            // console.log(this.suggestionBox);
         },
 
         hideSuggestions() {
@@ -251,13 +259,28 @@
     // 用户交互模块
     const UserInteractionModule = {
         selectedIndex: -1, // 当前选中的提示项索引
+        retryLimit: 5, // 重试次数限制
+        retryCount: 0, // 当前重试次数
 
         init() {
-            console.log('UserInteractionModule: Initializing...');
-            document.addEventListener('keydown', this.handleKeyDown.bind(this));
+            console.log('ShortcutModule: Initializing...');
+            this.bindTriggerKey();
         },
 
-        handleKeyDown(event) {
+        bindTriggerKey() {
+            if (InputCaptureModule.inputField) {
+                InputCaptureModule.inputField.addEventListener('keydown', this.handleTriggerKey.bind(this));
+                console.log('ShortcutModule: Keydown listener added.');
+            } else if (this.retryCount < this.retryLimit) {
+                this.retryCount++;
+                console.warn(`ShortcutModule: Input field not initialized. Retrying... (${this.retryCount}/${this.retryLimit})`);
+                setTimeout(this.bindTriggerKey.bind(this), 1000); // 1秒后重试
+            } else {
+                console.error('ShortcutModule: Failed to add keydown listener after maximum retries.');
+            }
+        },
+
+        handleTriggerKey(event) {
             const suggestions = SuggestionBoxModule.suggestionBox.children;
 
             // 如果建议框不可见或没有内容，忽略键盘事件
@@ -360,10 +383,13 @@
     // 初始化所有模块
     function init() {
         console.log('Script: Initializing all modules...');
+        // 初始化顺序确保依赖关系
         InputCaptureModule.init();
         SuggestionBoxModule.init();
+        setTimeout(() => { // 延迟初始化 ShortcutModule 确保输入框已经找到
+            ShortcutModule.init();
+        }, 500);
         UserInteractionModule.init();
-        ShortcutModule.init();
     }
 
     // 等待页面加载完成后初始化脚本
