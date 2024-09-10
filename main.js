@@ -1,74 +1,250 @@
 // ==UserScript==
 // @name         ChatGPT Prompt Suggestion Script
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      2.0
 // @description  A script to suggest prompts based on user input in the ChatGPT input box
 // @author       eternal-echo
 // @match        https://chatgpt.com/*
 // @grant        none
+// @license      MIT
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    // 捕获用户输入模块
-    const InputCaptureModule = {
-        inputField: null, // 存放输入框元素
-        triggerChar: '/', // 触发字符
-        retryLimit: 5, // 重试次数限制
-        retryCount: 0, // 当前重试次数
-    
+    // 输入框模块: 负责捕获输入和处理快捷键
+    const InputModule = {
+        inputField: null,
+        triggerChar: '/',
+        retryLimit: 5,
+        retryCount: 0,
+
         init() {
-            console.log('InputCaptureModule: Initializing...');
+            console.log('InputModule: Initializing...');
             this.findInputField();
         },
-    
-        findInputField() {
-            this.inputField = document.querySelector('textarea'); // 尝试获取输入框元素
-            if (this.inputField) {
-                this.inputField.addEventListener('keyup', this.handleInput.bind(this));
-                console.log('InputCaptureModule: Input field found and event listener added.');
-            } else if (this.retryCount < this.retryLimit) {
-                this.retryCount++;
-                console.warn(`InputCaptureModule: Input field not found. Retrying... (${this.retryCount}/${this.retryLimit})`);
-                setTimeout(this.findInputField.bind(this), 1000); // 1秒后重试
-            } else {
-                console.error('InputCaptureModule: Failed to find input field after maximum retries.');
+
+        // 插入prompt到输入框
+        // 输入的 prompt 填充到最后一个 / 所在行，而不是直接替换掉所有结果的末尾
+        insertPrompt(prompt) {
+            const inputValue = this.inputField.value;
+            const lastSlashIndex = inputValue.lastIndexOf(this.triggerChar);
+            if (lastSlashIndex !== -1) {
+                // 查找最后一个斜杠所在行的结束符
+                const beforeSlash = inputValue.slice(0, lastSlashIndex);
+                const afterSlash = inputValue.slice(lastSlashIndex);
+
+                // 找到换行符，表示该行的结束
+                const nextNewLine = afterSlash.indexOf('\n');
+                const endOfLineIndex = nextNewLine === -1 ? inputValue.length : lastSlashIndex + nextNewLine;
+
+                // 使用 suggestion.prompt 替换掉斜杠到行尾的部分
+                const newValue = beforeSlash + prompt + inputValue.slice(endOfLineIndex);
+                InputModule.inputField.value = newValue;
+
+                console.log(`SuggestionBoxModule: Replaced input with selected prompt: "${prompt}"`);
+                // 手动触发 input 事件，通知输入框内容更新
+                const event = new Event('input', { bubbles: true });
+                InputModule.inputField.dispatchEvent(event);
+                InputModule.inputField.dispatchEvent(new Event('change'));
+                // 移动光标到行末
+                this.inputField.selectionStart = this.inputField.selectionEnd = beforeSlash.length + prompt.length;
+                // focus
+                this.inputField.focus();
             }
         },
-    
+
+        findInputField() {
+            this.inputField = document.querySelector('textarea');
+            if (this.inputField) {
+                console.log('InputModule: Input field found.');
+                this.inputField.addEventListener('keyup', this.handleInput.bind(this));
+                this.inputField.addEventListener('keydown', this.handleKeydown.bind(this));
+            } else if (this.retryCount < this.retryLimit) {
+                this.retryCount++;
+                console.warn(`InputModule: Input field not found. Retrying... (${this.retryCount}/${this.retryLimit})`);
+                setTimeout(this.findInputField.bind(this), 1000);
+            } else {
+                console.error('InputModule: Failed to find input field after retries.');
+            }
+        },
+
         handleInput(event) {
-            if (!this.inputField) return; // 确保inputField已初始化
-    
-            const inputValue = this.inputField.value;
-            console.log(`InputCaptureModule: User typed - ${inputValue}`);
-    
-            const triggerIndex = inputValue.lastIndexOf(this.triggerChar);
-            if (triggerIndex !== -1) {
-                // 找到第一个 '\n' 的索引
-                const nextLineIndex = inputValue.indexOf('\n', triggerIndex);
+            const value = this.inputField.value;
+            console.log(`InputModule: User input detected: "${value}"`);
+            // '/': 触发建议框
+            if (event.key === this.triggerChar || !SuggestionBoxModule.isHidden()) {
+                const triggerIndex = value.lastIndexOf(this.triggerChar);
+                console.log(`InputModule: Trigger character "${this.triggerChar}" detected at index ${triggerIndex}`);
+                if (triggerIndex !== -1) {
+                    const query = value.slice(triggerIndex + 1, value.indexOf('\n', triggerIndex) || value.length);
+                    console.log(`InputModule: Extracted query after "${this.triggerChar}": "${query}"`);
+                    SuggestionBoxModule.renderSuggestions(DataModule.match(query));
+                }
+            }
+        },
 
-                // 如果找不到换行符，使用整个字符串结尾
-                const endIndex = nextLineIndex !== -1 ? nextLineIndex : inputValue.length;
+        handleKeydown(event) {
+            const suggestions = SuggestionBoxModule.suggestionBox.children;
+            if (!suggestions.length || SuggestionBoxModule.isHidden()) return;
 
-                // 获取 '/' 和 '\n' 之间的内容
-                const query = inputValue.slice(triggerIndex + 1, endIndex);
-                console.log(`InputCaptureModule: Extracted query - "${query}"`);
-
-                // 根据 query 进行匹配
-                const results = DataMatchingModule.match(query);
-
-                // 渲染建议框
-                SuggestionBoxModule.renderSuggestions(results);
+            switch (event.key) {
+                case 'ArrowDown':
+                    event.preventDefault();
+                    console.log('InputModule: ArrowDown key pressed.');
+                    SuggestionBoxModule.moveSelection(1);
+                    break;
+                case 'ArrowUp':
+                    event.preventDefault();
+                    console.log('InputModule: ArrowUp key pressed.');
+                    SuggestionBoxModule.moveSelection(-1);
+                    break;
+                case 'Tab':
+                    event.preventDefault();
+                    console.log('InputModule: Tab key pressed.');
+                    suggestions[SuggestionBoxModule.selectedIndex]?.click();
+                    break;
+                case 'Escape':
+                    console.log('InputModule: Escape key pressed. Hiding suggestions.');
+                    SuggestionBoxModule.hide();
+                    break;
+                default:
+                    break;
             }
         }
     };
-    
 
-    
+    // 建议框模块: 负责渲染、显示和处理建议选择
+    const SuggestionBoxModule = {
+        suggestionBox: null,
+        selectedIndex: 0,
+        state: 0,
+        MAX_SUGGESTION_BOX_HEIGHT: 200, // 定义一个常量用于存储建议框的最大高度
 
-    // Prompt 数据管理模块
-    const PromptManagerModule = {
+        init() {
+            console.log('SuggestionBoxModule: Initializing...');
+            this.createSuggestionBox();
+        },
+
+        // 若不存在则创建建议框
+        createSuggestionBox() {
+            // 检查是否已经存在 suggestionBox，以避免重复创建
+            if (document.querySelector('#suggestion-box')) {
+                console.warn('SuggestionBoxModule: Suggestion box already exists.');
+                return;
+            }
+
+            this.suggestionBox = document.createElement('div');
+            this.suggestionBox.id = 'suggestion-box';
+
+            Object.assign(this.suggestionBox.style, {
+                position: 'absolute', 
+                backgroundColor: 'white', 
+                border: '1px solid #ccc',
+                zIndex: '1000', 
+                maxHeight: `${this.MAX_SUGGESTION_BOX_HEIGHT}px`,
+                overflowY: 'auto', 
+                borderRadius: '5px',
+                display: 'none'
+            });
+            document.body.appendChild(this.suggestionBox);
+            // 检查建议框是否被成功添加到 DOM
+            if (document.body.contains(this.suggestionBox)) {
+                console.log('SuggestionBoxModule: Suggestion box successfully added to DOM.');
+            } else {
+                console.error('SuggestionBoxModule: Failed to add suggestion box to DOM.');
+            }
+        },
+
+        renderSuggestions(suggestions) {
+            this.createSuggestionBox();
+            this.clearSuggestions();
+            if (!suggestions.length) {
+                console.log('SuggestionBoxModule: No suggestions to display.');
+                return;
+            }
+
+            console.log(`SuggestionBoxModule: Rendering ${suggestions.length} suggestion(s).`);
+            suggestions.forEach((suggestion, index) => {
+                const item = document.createElement('div');
+                item.textContent = `[${suggestion.tag.join(', ')}] ${suggestion.name}: \n${suggestion.prompt.slice(0, 50)}...`;
+                item.style.padding = '5px';
+                item.style.cursor = 'pointer';
+                if (index === this.selectedIndex) item.style.backgroundColor = '#d3d3d3';
+
+                item.addEventListener('click', () => {
+                    // const inputValue = InputModule.inputField.value;
+                    // const lastSlashIndex = inputValue.lastIndexOf(InputModule.triggerChar);
+                    // if (lastSlashIndex !== -1) {
+                    //     InputModule.inputField.value = inputValue.slice(0, lastSlashIndex) + suggestion.prompt;
+                    //     console.log(`SuggestionBoxModule: Replaced input with selected prompt: "${suggestion.prompt}"`);
+                    // }
+                    InputModule.insertPrompt(suggestion.prompt);
+                    this.hide();
+                });
+
+                this.suggestionBox.appendChild(item);
+            });
+            this.updateSelection();
+
+            this.show();
+        },
+
+        moveSelection(step) {
+            const suggestions = this.suggestionBox.children;
+            if (!suggestions.length) return;
+
+            this.selectedIndex = (this.selectedIndex + step + suggestions.length) % suggestions.length;
+            this.updateSelection();
+        },
+
+        updateSelection() {
+            Array.from(this.suggestionBox.children).forEach((child, idx) => {
+                child.style.backgroundColor = idx === this.selectedIndex ? '#d3d3d3' : '';
+                // 确保选中项在视野内
+                if (idx === this.selectedIndex) {
+                    child.scrollIntoView({ block: 'nearest' });
+                }
+            });
+            console.log(`SuggestionBoxModule: Updated selectedIndex to ${this.selectedIndex}`);
+        },
+
+        show() {
+            // 获取建议框高度，默认值为suggestionBox.offsetHeight，若没有则是suggestionBox.style.maxHeight的值
+            const suggestionBoxHeight = (this.suggestionBox.offsetHeight) || this.MAX_SUGGESTION_BOX_HEIGHT;
+            const rect = InputModule.inputField.getBoundingClientRect();
+            this.state = 1;
+            Object.assign(this.suggestionBox.style, {
+                top: `${window.scrollY + rect.top - suggestionBoxHeight}px`,
+                left: `${window.scrollX + rect.left}px`,
+                width: `${rect.width}px`,
+                display: 'block',
+                zIndex: '9999',
+                overflowY: 'auto',
+            });
+            console.log('SuggestionBoxModule: Suggestion box displayed.');
+            console.log(this.suggestionBox);
+        },
+
+        hide() {
+            this.suggestionBox.style.display = 'none';
+            this.selectedIndex = 0;
+            this.state = 0;
+            console.log('SuggestionBoxModule: Suggestion box hidden.');
+        },
+
+        isHidden() {
+            return this.state === 0;
+        },
+
+        clearSuggestions() {
+            this.suggestionBox.innerHTML = '';
+            console.log('SuggestionBoxModule: Cleared previous suggestions.');
+        }
+    };
+
+    // 数据匹配模块: 根据查询匹配 prompt
+    const DataModule = {
         promptsData: [
             // prompt 示例
             {
@@ -143,256 +319,25 @@
                 "tag" : ["instruction"],
                 "prompt": "\n请你仅给出修改的代码片段，并说明修改的原因。\n"
             },
-        ], // 示例数据
-    };
+        ],
 
-    // 建议框渲染模块
-    const SuggestionBoxModule = {
-        suggestionBox: null, // 用于存储建议框的DOM元素
-        selectedIndex: -1, // 当前选中的提示项索引
-
-        init() {
-            console.log('SuggestionBoxModule: Initializing...');
-            this.suggestionBox = document.createElement('div');
-            this.suggestionBox.style.position = 'absolute';
-            this.suggestionBox.style.backgroundColor = 'white';
-            this.suggestionBox.style.border = '1px solid #ccc';
-            this.suggestionBox.style.zIndex = '1000';
-            this.suggestionBox.style.maxHeight = '200px';
-            this.suggestionBox.style.overflowY = 'auto';
-            this.suggestionBox.style.display = 'none'; // 初始隐藏
-            document.body.appendChild(this.suggestionBox);
-            console.log('SuggestionBoxModule: Suggestion box created and added to the DOM.');
-        },
-
-        renderSuggestions(suggestions) {
-            if (suggestions.length === 0) {
-                // this.suggestionBox.style.display = 'none';
-                console.log('SuggestionBoxModule: No suggestions to display.');
-                return;
-            }
-
-            // 保持当前的选中项
-            const previousSelectedIndex = this.selectedIndex;
-
-            // 清空之前的建议
-            this.suggestionBox.innerHTML = '';
-
-            suggestions.forEach((suggestion, index) => {
-                const suggestionItem = document.createElement('div');
-                suggestionItem.style.padding = '5px';
-                suggestionItem.style.cursor = 'pointer';
-        
-                // 如果是选中的索引，保持高亮
-                if (index === previousSelectedIndex) {
-                    suggestionItem.style.backgroundColor = '#d3d3d3';
-                }
-
-                // 添加提示内容，格式为 "[tag] name:\n prompt"
-                suggestionItem.textContent = `[${suggestion.tag.join(', ')}] ${suggestion.name}:\n ${suggestion.prompt.substring(0, 50)}...`;
-        
-                // 添加点击事件
-                suggestionItem.addEventListener('click', () => {
-                    const inputValue = InputCaptureModule.inputField.value;
-                    // 找到最后一个 '/' 及其后面的内容
-                    const lastSlashIndex = inputValue.lastIndexOf('/');
-                    if (lastSlashIndex !== -1) {
-                        // 将最后一个 '/' 后的内容替换为选中的 prompt
-                        const newValue = inputValue.slice(0, lastSlashIndex) + suggestion.prompt;
-                        InputCaptureModule.inputField.value = newValue;
-                        console.log(`SuggestionBoxModule: Replaced content after last "/" with selected prompt - "${suggestion.prompt}"`);
-                    }
-                    this.suggestionBox.style.display = 'none';
-                    UserInteractionModule.resetSelection(); // 重置选择
-                });
-        
-                // 添加到建议框
-                this.suggestionBox.appendChild(suggestionItem);
-            });
-
-            // 显示建议框并调整位置
-            const inputFieldRect = InputCaptureModule.inputField.getBoundingClientRect();
-            this.suggestionBox.style.top = `${window.scrollY + inputFieldRect.top - this.suggestionBox.offsetHeight}px`; // 调整位置以对齐
-            this.suggestionBox.style.left = `${window.scrollX + inputFieldRect.left}px`;
-            this.suggestionBox.style.width = `${inputFieldRect.width}px`;
-            this.suggestionBox.style.display = 'block';
-            // 日志中打印建议框suggestionBox的所有参数
-            console.log('SuggestionBoxModule: Suggestion box displayed and positioned.');
-            // console.log(this.suggestionBox);
-        },
-
-        hideSuggestions() {
-            this.suggestionBox.style.display = 'none';
-            this.selectedIndex = -1; // 重置选中项
-            console.log('SuggestionBoxModule: Suggestion box hidden.');
-        },
-
-        showSuggestions() {
-            this.suggestionBox.style.display = 'block';
-            console.log('SuggestionBoxModule: Suggestion box shown.');
-        },
-
-        selectItem(index) {
-            const suggestions = this.suggestionBox.children;
-        
-            // 清除当前选中的高亮
-            if (this.selectedIndex >= 0 && this.selectedIndex < suggestions.length) {
-                suggestions[this.selectedIndex].style.backgroundColor = ''; // 取消高亮
-            }
-        
-            // 更新选中的索引
-            this.selectedIndex = index;
-        
-            // 添加新的高亮
-            if (this.selectedIndex >= 0 && this.selectedIndex < suggestions.length) {
-                suggestions[this.selectedIndex].style.backgroundColor = '#d3d3d3'; // 添加高亮
-                suggestions[this.selectedIndex].scrollIntoView({ block: 'nearest' }); // 确保选中项在视野内
-            }
-        
-            console.log(`SuggestionBoxModule: Selected item at index ${this.selectedIndex}`);
-        }
-    };
-
-    
-
-
-    // 用户交互模块
-    const UserInteractionModule = {
-        selectedIndex: -1, // 当前选中的提示项索引
-        retryLimit: 5, // 重试次数限制
-        retryCount: 0, // 当前重试次数
-
-        init() {
-            console.log('ShortcutModule: Initializing...');
-            this.bindTriggerKey();
-        },
-
-        bindTriggerKey() {
-            if (InputCaptureModule.inputField) {
-                InputCaptureModule.inputField.addEventListener('keydown', this.handleTriggerKey.bind(this));
-                console.log('ShortcutModule: Keydown listener added.');
-            } else if (this.retryCount < this.retryLimit) {
-                this.retryCount++;
-                console.warn(`ShortcutModule: Input field not initialized. Retrying... (${this.retryCount}/${this.retryLimit})`);
-                setTimeout(this.bindTriggerKey.bind(this), 1000); // 1秒后重试
-            } else {
-                console.error('ShortcutModule: Failed to add keydown listener after maximum retries.');
-            }
-        },
-
-        handleTriggerKey(event) {
-            const suggestions = SuggestionBoxModule.suggestionBox.children;
-
-            // 如果建议框不可见或没有内容，忽略键盘事件
-            if (SuggestionBoxModule.suggestionBox.style.display === 'none' || suggestions.length === 0) return;
-
-            switch (event.key) {
-                case 'ArrowDown':
-                    event.preventDefault(); // 防止默认的光标移动
-                    this.moveSelection(1);
-                    break;
-                case 'ArrowUp':
-                    event.preventDefault();
-                    this.moveSelection(-1);
-                    break;
-                // Tab
-                case 'Tab':
-                    if (SuggestionBoxModule.selectedIndex >= 0 && SuggestionBoxModule.selectedIndex < suggestions.length) {
-                        event.preventDefault();
-                        suggestions[SuggestionBoxModule.selectedIndex].click();
-                    }
-                    break;
-                case 'Escape':
-                    // 按下 ESC 键时隐藏建议框，并重置选项
-                    SuggestionBoxModule.hideSuggestions();
-                    this.resetSelection();
-                    break;
-                default:
-                    break;
-            }
-        },
-
-        moveSelection(step) {
-            const suggestions = SuggestionBoxModule.suggestionBox.children;
-
-            if (SuggestionBoxModule.selectedIndex === -1) {
-                // 如果没有选中任何项，从第一个开始选中
-                SuggestionBoxModule.selectItem(0);
-            } else {
-                const newIndex = (SuggestionBoxModule.selectedIndex + step + suggestions.length) % suggestions.length;
-                SuggestionBoxModule.selectItem(newIndex);
-            }
-        },
-
-        resetSelection() {
-            this.selectedIndex = -1;
-            console.log('UserInteractionModule: Reset selection');
-        }
-    };
-
-    
-
-
-    // 数据匹配模块
-    const DataMatchingModule = {
         match(query) {
-            console.log(`DataMatchingModule: Performing match for query "${query}"`);
-
-            // 如果查询为空，则返回所有的 prompts
-            if (query.trim() === "") {
-                console.log(`DataMatchingModule: Query is empty, returning all prompts.`);
-                return PromptManagerModule.promptsData;
-            }
-
-            // 简单的模糊匹配逻辑，匹配 `name` 或 `prompt` 字段
-            const results = PromptManagerModule.promptsData.filter(item => {
-                const queryLower = query.toLowerCase();
-                return item.name.toLowerCase().includes(queryLower) || item.prompt.toLowerCase().includes(queryLower);
-            });
-
-            console.log(`DataMatchingModule: Found ${results.length} result(s) for query "${query}"`);
+            const lowerQuery = query.toLowerCase().trim();
+            const results = this.promptsData.filter(item =>
+                item.name.toLowerCase().includes(lowerQuery) || item.prompt.toLowerCase().includes(lowerQuery)
+            );
+            console.log(`DataModule: Found ${results.length} result(s) for query "${query}"`);
             return results;
         }
     };
 
-    // 快捷键与操作逻辑模块
-    const ShortcutModule = {
-        triggerKey: '/', // 触发字符
-
-        init() {
-            console.log('ShortcutModule: Initializing...');
-    
-            // 添加此处判断，确保 inputField 已经正确获取
-            if (InputCaptureModule.inputField) {
-                InputCaptureModule.inputField.addEventListener('keydown', this.handleTriggerKey.bind(this));
-            } else {
-                console.error('ShortcutModule: Input field is not initialized.');
-            }
-        },
-
-        handleTriggerKey(event) {
-            if (event.key === this.triggerKey) {
-                console.log(`ShortcutModule: Trigger key "${this.triggerKey}" pressed.`);
-                // 显示建议框
-                SuggestionBoxModule.showSuggestions();
-                InputCaptureModule.handleInput(event); // 手动调用输入捕获
-            }
-        }
-    };
-
-    // 初始化所有模块
+    // 初始化
     function init() {
         console.log('Script: Initializing all modules...');
-        // 初始化顺序确保依赖关系
-        InputCaptureModule.init();
+        InputModule.init();
         SuggestionBoxModule.init();
-        setTimeout(() => { // 延迟初始化 ShortcutModule 确保输入框已经找到
-            ShortcutModule.init();
-        }, 500);
-        UserInteractionModule.init();
     }
 
-    // 等待页面加载完成后初始化脚本
     window.addEventListener('load', init);
 
 })();
